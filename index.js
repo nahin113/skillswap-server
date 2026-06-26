@@ -29,6 +29,26 @@ async function run() {
     await client.connect();
 
     const database = client.db("skillswap_db");
+    const usersCollection = database.collection("user");
+
+    app.get("/api/freelancers", async (req, res) => {
+      const query = { accountType : 'freelancer' };
+      const cursor = usersCollection.find(query);
+      const result = await cursor.toArray();
+      console.log(result)
+      res.json(result);
+    });
+
+    
+    app.get("/api/freelancers/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = {
+        _id: new ObjectId(id),
+      };
+      const result = await usersCollection.findOne(query);
+      console.log(result)
+      res.json(result);
+    });
 
 
     // Send a ping to confirm a successful connection

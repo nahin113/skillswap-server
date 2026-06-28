@@ -72,7 +72,20 @@ async function run() {
     });
 
     
-
+    app.patch(
+      "/api/tasks/:id",async (req, res) => {
+        const id = req.params.id;
+        const updatedTask = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+          $set: {
+            status: updatedTask.status,
+          },
+        };
+        const result = await tasksCollection.updateOne(filter, updatedDoc);
+        res.json(result);
+      }
+    );
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });

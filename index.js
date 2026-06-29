@@ -60,32 +60,66 @@ async function run() {
       res.json(result);
     });
 
-    
     app.get("/api/tasks", async (req, res) => {
-      const email = req.email;
-      const query = {
-        email : email
-      };
-      const result = await tasksCollection.find(query).toArray();
-      console.log(result)
+      const query = {};
+      console.log("Backend hitted successfully");
+      if (req.query.search) {
+        query.$or = [
+          { title: { $regex: req.query.search, $options: "i" } },
+          { client_email: { $regex: req.query.search, $options: "i" } },
+        ];
+      }
+
+      if (req.query.category) {
+        query.category = req.query.category;
+      }
+
+      if (req.query.clientId) query.clientId = req.query.clientId;
+      if (req.query.status) query.status = req.query.status;
+
+      // pagination
+      if (req.query.page) {
+        const page = req.query.page;
+        const perPage = req.query.perPage || 12;
+        const skipItems = (page - 1) * perPage;
+        const total = await tasksCollection.countDocuments(query);
+        const cursor = tasksCollection
+          .find(query)
+          .skip(skipItems)
+          .limit(perPage);
+        const tasks = await cursor.toArray();
+        return res.json({ total, tasks });
+      }
+
+      console.log("Q", query);
+      const cursor = tasksCollection.find(query);
+      const result = await cursor.toArray();
+      console.log("result", result);
       res.json(result);
     });
 
-    
-    app.patch(
-      "/api/tasks/:id",async (req, res) => {
-        const id = req.params.id;
-        const updatedTask = req.body;
-        const filter = { _id: new ObjectId(id) };
-        const updatedDoc = {
-          $set: {
-            status: updatedTask.status,
-          },
-        };
-        const result = await tasksCollection.updateOne(filter, updatedDoc);
-        res.json(result);
-      }
-    );
+    app.get("/api/tasks/my-tasks", async (req, res) => {
+      const email = req.email;
+      const query = {
+        email: email,
+      };
+      const result = await tasksCollection.find(query).toArray();
+      console.log(result);
+      res.json(result);
+    });
+
+    app.patch("/api/tasks/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedTask = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          status: updatedTask.status,
+        },
+      };
+      const result = await tasksCollection.updateOne(filter, updatedDoc);
+      res.json(result);
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });

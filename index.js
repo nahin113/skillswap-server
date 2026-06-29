@@ -126,6 +126,29 @@ async function run() {
      res.json(result);
     });
 
+    app.get("/api/proposals/by-task", async (req, res) => {
+      try {
+        const taskId = req.query.taskId;
+
+        if (!taskId) {
+          return res
+            .status(400)
+            .json({ error: "Missing taskId query parameter" });
+        }
+
+        // Find all proposals matching this specific task card ID
+        const query = { task_id: taskId };
+        const result = await proposalsCollection.find(query).toArray();
+
+        res.json(result);
+      } catch (error) {
+        console.error("Error fetching proposals by task ID:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+      }
+    });
+
+    
+
     
 
     app.post("/api/proposals", async (req, res) => {

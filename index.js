@@ -3,6 +3,7 @@ const cors = require("cors");
 const app = express();
 const port = 5000;
 require("dotenv").config();
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
 app.use(express.json());
@@ -32,6 +33,7 @@ async function run() {
     const usersCollection = database.collection("user");
     const tasksCollection = database.collection("task");
     const proposalsCollection = database.collection("proposal");
+    const paymentsCollection = database.collection("payment");
 
     app.get("/api/freelancers", async (req, res) => {
       const query = { accountType: "freelancer" };
@@ -118,12 +120,12 @@ async function run() {
     });
 
     app.get("/api/proposals/my-proposals", async (req, res) => {
-     const email = req.email;
-     const query = {
-       email: email,
-     };
-     const result = await proposalsCollection.find(query).toArray();
-     res.json(result);
+      const email = req.email;
+      const query = {
+        email: email,
+      };
+      const result = await proposalsCollection.find(query).toArray();
+      res.json(result);
     });
 
     app.get("/api/proposals/by-task", async (req, res) => {
@@ -146,10 +148,6 @@ async function run() {
         res.status(500).json({ error: "Internal Server Error" });
       }
     });
-
-    
-
-    
 
     app.post("/api/proposals", async (req, res) => {
       try {
@@ -177,11 +175,9 @@ async function run() {
         });
 
         if (existingProposal) {
-          return res
-            .status(400)
-            .json({
-              error: "You have already submitted a proposal for this task.",
-            });
+          return res.status(400).json({
+            error: "You have already submitted a proposal for this task.",
+          });
         }
         const newProposal = {
           task_id: task_id,
@@ -201,8 +197,6 @@ async function run() {
       }
     });
 
-
-
     app.patch("/api/tasks/:id", async (req, res) => {
       const id = req.params.id;
       const updatedTask = req.body;
@@ -215,6 +209,137 @@ async function run() {
       const result = await tasksCollection.updateOne(filter, updatedDoc);
       res.json(result);
     });
+
+    app.patch("/api/proposals/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedProposal = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: {
+          status: updatedProposal.status,
+        },
+      };
+      const result = await proposalsCollection.updateOne(filter, updatedDoc);
+      res.json(result);
+    });
+
+
+
+app.post("/api/payments/confirm-session", async (req, res) => {
+  try {
+    const { session_id } = req.body;
+    if (!session_id) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Missing session_id parameter." });
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(session_id);
+    if (!session || session.payment_status !== "paid") {
+      return res
+        .status(400)
+        .json({ success: false, error: "Stripe payment verification failed." });
+    }
+
+    const {
+      taskId,
+      proposalId,
+      amount,
+      freelancerEmail,
+      clientEmail,
+      taskTitle,
+    } = session.metadata;
+
+    // 🔍 Check your backend terminal for this log to ensure data survived the roundtrip!
+    console.log("Processing verified Stripe metadata:", session.metadata);
+
+    // Validate ID formats before passing to MongoDB constructor to prevent unhandled exceptions
+    if (!taskId || !proposalId) {
+      return res
+        .status(400)
+        .json({
+          success: false,
+          error: "Invalid metadata payload returned from payment processor.",
+        });
+    }
+
+    const currentTask = await tasksCollection.findOne({
+      _id: new ObjectId(taskId),
+    });
+    if (!currentTask) {
+      return res
+        .status(404)
+        .json({
+          success: false,
+          error: "Target task listing no longer exists.",
+        });
+    }
+
+    if (currentTask.status === "In Progress") {
+      // If you refresh the page after a successful save, it hits this guard clause.
+      // Let's make it user-friendly by returning a graceful success state instead of an error!
+      const existingPayment = await paymentsCollection.findOne({
+        transaction_id: session.payment_intent,
+      });
+      return res.json({
+        success: true,
+        data: {
+          taskTitle,
+          freelancerEmail,
+          amount: existingPayment ? existingPayment.amount : parseFloat(amount),
+        },
+      });
+    }
+
+    // 1. Update the parent task status
+    await tasksCollection.updateOne(
+      { _id: new ObjectId(taskId) },
+      { $set: { status: "In Progress" } }
+    );
+
+    // 2. Accept the winning proposal
+    await proposalsCollection.updateOne(
+      { _id: new ObjectId(proposalId) },
+      { $set: { status: "Accepted" } }
+    );
+
+    // 3. Reject all other competitive proposal rows for this task automatically
+    await proposalsCollection.updateMany(
+      { task_id: taskId, _id: { $ne: new ObjectId(proposalId) } },
+      { $set: { status: "Rejected" } }
+    );
+
+    // 4. Record to ledger
+    const newPaymentDoc = {
+      client_email: clientEmail,
+      freelancer_email: freelancerEmail,
+      task_id: taskId,
+      amount: parseFloat(amount || 0),
+      transaction_id: session.payment_intent,
+      payment_status: "paid",
+      paid_at: new Date(),
+    };
+    await paymentsCollection.insertOne(newPaymentDoc);
+
+    // 🚀 Return success: true explicitly
+    res.json({
+      success: true,
+      data: {
+        taskTitle,
+        freelancerEmail,
+        amount: newPaymentDoc.amount,
+      },
+    });
+  } catch (error) {
+    console.error("Session Confirmation Sync Error:", error);
+    res
+      .status(500)
+      .json({
+        success: false,
+        error: error.message || "Internal Server Error",
+      });
+  }
+});
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });

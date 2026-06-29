@@ -31,6 +31,7 @@ async function run() {
     const database = client.db("skillswap_db");
     const usersCollection = database.collection("user");
     const tasksCollection = database.collection("task");
+    const proposalsCollection = database.collection("proposal");
 
     app.get("/api/freelancers", async (req, res) => {
       const query = { accountType: "freelancer" };
@@ -104,9 +105,80 @@ async function run() {
         email: email,
       };
       const result = await tasksCollection.find(query).toArray();
-      console.log(result);
       res.json(result);
     });
+
+    app.get("/api/tasks/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = {
+        _id: new ObjectId(id),
+      };
+      const result = await tasksCollection.findOne(query);
+      res.json(result);
+    });
+
+    app.get("/api/proposals/my-proposals", async (req, res) => {
+     const email = req.email;
+     const query = {
+       email: email,
+     };
+     const result = await proposalsCollection.find(query).toArray();
+     res.json(result);
+    });
+
+    
+
+    app.post("/api/proposals", async (req, res) => {
+      try {
+        const {
+          task_id,
+          freelancer_email,
+          proposed_budget,
+          estimated_days,
+          cover_note,
+        } = req.body;
+        if (
+          !task_id ||
+          !freelancer_email ||
+          !proposed_budget ||
+          !estimated_days ||
+          !cover_note
+        ) {
+          return res
+            .status(400)
+            .json({ error: "All input fields are required" });
+        }
+        const existingProposal = await proposalsCollection.findOne({
+          task_id: task_id,
+          freelancer_email: freelancer_email,
+        });
+
+        if (existingProposal) {
+          return res
+            .status(400)
+            .json({
+              error: "You have already submitted a proposal for this task.",
+            });
+        }
+        const newProposal = {
+          task_id: task_id,
+          freelancer_email: freelancer_email,
+          proposed_budget: parseFloat(proposed_budget),
+          estimated_days: parseInt(estimated_days),
+          cover_note: cover_note,
+          status: "pending",
+          submitted_at: new Date(),
+        };
+
+        const result = await proposalsCollection.insertOne(newProposal);
+        res.status(201).json({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        console.error("Error saving proposal:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+      }
+    });
+
+
 
     app.patch("/api/tasks/:id", async (req, res) => {
       const id = req.params.id;

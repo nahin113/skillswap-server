@@ -52,7 +52,13 @@ app.get("/api/tasks", async (req, res) => {
   const query = {};
   const cursor = tasksCollection.find(query);
   const result = await cursor.toArray();
-  console.log(result)
+  res.json(result);
+});
+
+app.get("/api/payments", async (req, res) => {
+  const query = {};
+  const cursor = paymentsCollection.find(query);
+  const result = await cursor.toArray();
   res.json(result);
 });
 

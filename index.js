@@ -220,10 +220,26 @@ app.patch("/api/tasks/:id", async (req, res) => {
   const id = req.params.id;
   const updatedTask = req.body;
   const filter = { _id: new ObjectId(id) };
+
+  const updateFields = {};
+
+  if (updatedTask.title !== undefined) updateFields.title = updatedTask.title;
+  if (updatedTask.category !== undefined)
+    updateFields.category = updatedTask.category;
+  if (updatedTask.description !== undefined)
+    updateFields.description = updatedTask.description;
+  if (updatedTask.budget !== undefined)
+    updateFields.budget = Number(updatedTask.budget);
+  if (updatedTask.deadline !== undefined)
+    updateFields.deadline = updatedTask.deadline;
+  if (updatedTask.status !== undefined)
+    updateFields.status = updatedTask.status;
+
+  if (Object.keys(updateFields).length === 0) {
+    return res.status(400).json({ error: "No update parameters provided" });
+  }
   const updatedDoc = {
-    $set: {
-      status: updatedTask.status,
-    },
+    $set: updateFields,
   };
   const result = await tasksCollection.updateOne(filter, updatedDoc);
   res.json(result);

@@ -160,6 +160,79 @@ app.get("/api/proposals/my-proposals", async (req, res) => {
   res.json(result);
 });
 
+app.get(
+  "/api/proposals/byMail-freelancer-applied-proposal",
+  async (req, res) => {
+    try {
+      const email = req.query.email;
+
+      if (!email) {
+        return res
+          .status(400)
+          .json({ error: "Missing identity query target payload" });
+      }
+
+      console.log("Searching accepted tasks for freelancer:", email);
+
+      // 1. Get all accepted proposals for this freelancer
+      const proposals = await proposalsCollection
+        .find({
+          freelancer_email: email,
+          status: "Accepted",
+        })
+        .toArray();
+
+      if (proposals.length === 0) {
+        return res.json([]); // Return early if they haven't applied anywhere or aren't accepted
+      }
+
+      // 2. Extract the task_id strings and convert them into proper ObjectIds
+      const taskObjectIds = proposals.map((p) => new ObjectId(p.task_id));
+
+      // 3. Query the Task Collection for these IDs where status is NOT completed
+      const matchingTasks = await tasksCollection
+        .find({
+          _id: { $in: taskObjectIds },
+          status: { $ne: "completed" }, // 🎯 $ne means "Not Equal to" completed
+        })
+        .toArray();
+
+      // 4. Map the data together so the frontend gets the proposed budget context easily
+      const responseData = matchingTasks.map((task) => {
+        // Find the proposal that matched this specific task to grab the custom budget
+        const matchingProposal = proposals.find(
+          (p) => p.task_id === task._id.toString()
+        );
+
+        return {
+          _id: task._id,
+          title: task.title,
+          category: task.category,
+          client_email: task.client_email,
+          description: task.description,
+          status: task.status, // Will display "in-progress" or "open"
+          budget: matchingProposal
+            ? matchingProposal.proposed_budget
+            : task.budget,
+          deliverable_url: task.deliverable_url || "",
+        };
+      });
+
+      console.log(
+        `Delivering ${responseData.length} non-completed active workspace structures.`
+      );
+      res.json(responseData);
+    } catch (error) {
+      console.error("Failed to build freelancer project list:", error);
+      res
+        .status(500)
+        .json({
+          error: "Internal compilation error inside database runtime engine",
+        });
+    }
+  }
+);
+
 app.get("/api/proposals/by-task", async (req, res) => {
   try {
     const taskId = req.query.taskId;

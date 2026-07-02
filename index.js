@@ -133,7 +133,6 @@ app.get("/api/tasks/my-tasks", async (req, res) => {
   res.json(result);
 });
 
-
 app.get("/api/tasks/my-payments", async (req, res) => {
   const email = req.email;
   const query = {
@@ -253,6 +252,40 @@ app.patch("/api/tasks/:id", async (req, res) => {
   };
   const result = await tasksCollection.updateOne(filter, updatedDoc);
   res.json(result);
+});
+
+app.patch("/api/user/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updatedUser = req.body;
+    const filter = { _id: new ObjectId(id) };
+    const updateFields = {};
+
+    if (updatedUser.name !== undefined) updateFields.name = updatedUser.name;
+    if (updatedUser.image !== undefined) updateFields.image = updatedUser.image;
+    if (updatedUser.bio !== undefined) updateFields.bio = updatedUser.bio;
+    if (updatedUser.rate !== undefined)
+      updateFields.rate = Number(updatedUser.rate);
+    if (updatedUser.skills !== undefined)
+      updateFields.skills = updatedUser.skills;
+
+    if (Object.keys(updateFields).length === 0) {
+      return res
+        .status(400)
+        .json({ error: "No profile update parameters provided" });
+    }
+
+    const result = await usersCollection.updateOne(filter, {
+      $set: updateFields,
+    });
+    console.log(result);
+    res.json(result);
+  } catch (error) {
+    console.error("Profile update pipeline failed:", error);
+    res
+      .status(500)
+      .json({ error: "Internal server error during profile save" });
+  }
 });
 
 app.patch("/api/proposals/:id", async (req, res) => {

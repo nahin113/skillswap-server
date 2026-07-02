@@ -48,7 +48,7 @@ app.get("/api/freelancers", async (req, res) => {
   res.json(result);
 });
 
-app.get("/api/tasks", async (req, res) => {
+app.get("/api/tasks/all-tasks", async (req, res) => {
   const query = {};
   const cursor = tasksCollection.find(query);
   const result = await cursor.toArray();
@@ -130,6 +130,16 @@ app.get("/api/tasks/my-tasks", async (req, res) => {
     email: email,
   };
   const result = await tasksCollection.find(query).toArray();
+  res.json(result);
+});
+
+
+app.get("/api/tasks/my-payments", async (req, res) => {
+  const email = req.email;
+  const query = {
+    email: email,
+  };
+  const result = await paymentsCollection.find(query).toArray();
   res.json(result);
 });
 

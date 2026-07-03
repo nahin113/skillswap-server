@@ -517,7 +517,7 @@ app.get("/api/freelancer/earnings", async (req, res) => {
           : "Unknown Assignment Workspace",
         clientEmail: p.client_email,
         amount: Number(p.amount || 0),
-        completionDate: matchingTask?.completed_at || p.paid_at, // Fallback to paid timestamp if missing
+        completionDate: matchingTask?.completed_at || p.paid_at,
       };
     });
 
@@ -528,6 +528,51 @@ app.get("/api/freelancer/earnings", async (req, res) => {
   }
 });
 
+app.get("/api/freelancer/dashboard-stats", async (req, res) => {
+  try {
+    const email = req.query.email;
+    if (!email) {
+      return res
+        .status(400)
+        .json({ error: "Missing freelancer identity context parameter" });
+    }
+
+    const [totalProposals, pendingProposals, acceptedProposals] =
+      await Promise.all([
+        proposalsCollection.countDocuments({ freelancer_email: email }),
+        proposalsCollection.countDocuments({
+          freelancer_email: email,
+          status: "Pending",
+        }),
+        proposalsCollection.countDocuments({
+          freelancer_email: email,
+          status: "Accepted",
+        }),
+      ]);
+
+    const payments = await paymentsCollection
+      .find({
+        freelancer_email: email,
+        payment_status: "paid",
+      })
+      .toArray();
+
+    const totalEarnings = payments.reduce(
+      (sum, p) => sum + Number(p.amount || 0),
+      0
+    );
+
+    res.json({
+      totalProposals,
+      pendingProposals,
+      acceptedProposals,
+      totalEarnings,
+    });
+  } catch (error) {
+    console.error("Dashboard overview pipeline crash:", error);
+    res.status(500).json({ error: "Database analytics aggregation error" });
+  }
+});
 // Send a ping to confirm a successful connection
 // await client.db("admin").command({ ping: 1 });
 //     console.log(

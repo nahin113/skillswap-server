@@ -160,9 +160,7 @@ app.get("/api/proposals/my-proposals", async (req, res) => {
   res.json(result);
 });
 
-app.get(
-  "/api/proposals/byMail-freelancer-applied-proposal",
-  async (req, res) => {
+app.get("/api/proposals/byMail-freelancer-applied-proposal",async (req, res) => {
     try {
       const email = req.query.email;
 
@@ -481,6 +479,52 @@ app.post("/api/payments/confirm-session", async (req, res) => {
       success: false,
       error: error.message || "Internal Server Error",
     });
+  }
+});
+
+app.get("/api/freelancer/earnings", async (req, res) => {
+  try {
+    const email = req.query.email;
+    if (!email) {
+      return res
+        .status(400)
+        .json({ error: "Missing identity query parameter" });
+    }
+
+    // 1. Find all paid clearances for this freelancer
+    const payments = await paymentsCollection
+      .find({
+        freelancer_email: email,
+        payment_status: "paid",
+      })
+      .toArray();
+
+    if (payments.length === 0) return res.json([]);
+
+    // 2. Fetch all matching tasks to get titles and completion timestamps
+    const taskIds = payments.map((p) => new ObjectId(p.task_id));
+    const tasks = await tasksCollection
+      .find({ _id: { $in: taskIds } })
+      .toArray();
+
+    // 3. Combine payloads into a unified table ledger row
+    const ledger = payments.map((p) => {
+      const matchingTask = tasks.find((t) => t._id.toString() === p.task_id);
+      return {
+        _id: p._id,
+        taskTitle: matchingTask
+          ? matchingTask.title
+          : "Unknown Assignment Workspace",
+        clientEmail: p.client_email,
+        amount: Number(p.amount || 0),
+        completionDate: matchingTask?.completed_at || p.paid_at, // Fallback to paid timestamp if missing
+      };
+    });
+
+    res.json(ledger);
+  } catch (error) {
+    console.error("Earnings retrieval failed:", error);
+    res.status(500).json({ error: "Database mapping failure" });
   }
 });
 

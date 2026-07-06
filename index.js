@@ -3,6 +3,7 @@ const cors = require("cors");
 const app = express();
 const port = 5000;
 require("dotenv").config();
+const jwt = require("jsonwebtoken");
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors());
@@ -13,6 +14,7 @@ app.get("/", (req, res) => {
 });
 
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const { createRemoteJWKSet, jwtVerify } = require("jose-cjs");
 const uri = process.env.MONGODB_URI;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -40,11 +42,58 @@ const tasksCollection = database.collection("task");
 const proposalsCollection = database.collection("proposal");
 const paymentsCollection = database.collection("payment");
 
+const JWKS = createRemoteJWKSet(
+  new URL(`${process.env.BETTER_AUTH_URL}api/auth/jwks`)
+);
+
+const verifyToken = async (req, res, next) => {
+  const authHeader = req?.headers.authorization;
+  if (!authHeader) return res.status(401).json({ message: "Unauthorized" });
+  const token = authHeader.split(" ")[1];
+  if (!token) return res.status(401).json({ message: "Unauthorized" });
+
+  try {
+    const { payload } = await jwtVerify(token, JWKS);
+
+    req.payload = payload;
+    req.email = payload.email;
+    next();
+  } catch (error) {
+    return res.status(403).json({ message: "Forbidden" });
+  }
+};
+
+const verifyClient = (req, res, next) => {
+  if (req.payload?.accountType !== "client") {
+    return res
+      .status(403)
+      .json({ message: "forbidden access: Client role required" });
+  }
+  next();
+};
+
+const verifyAdmin = (req, res, next) => {
+  if (req.payload?.accountType !== "admin") {
+    return res
+      .status(403)
+      .json({ message: "forbidden access: Admin role required" });
+  }
+  next();
+};
+
+const verifyFreelancer = (req, res, next) => {
+  if (req.payload?.accountType !== "freelancer") {
+    return res
+      .status(403)
+      .json({ message: "forbidden access: Freelancer role required" });
+  }
+  next();
+};
+
 app.get("/api/freelancers", async (req, res) => {
   const query = { accountType: "freelancer" };
   const cursor = usersCollection.find(query);
   const result = await cursor.toArray();
-  console.log(result);
   res.json(result);
 });
 
@@ -55,14 +104,14 @@ app.get("/api/tasks/all-tasks", async (req, res) => {
   res.json(result);
 });
 
-app.get("/api/payments", async (req, res) => {
+app.get("/api/payments", verifyToken, verifyAdmin, async (req, res) => {
   const query = {};
   const cursor = paymentsCollection.find(query);
   const result = await cursor.toArray();
   res.json(result);
 });
 
-app.delete("/api/tasks/:id", async (req, res) => {
+app.delete("/api/tasks/:id", verifyToken, async (req, res) => {
   const id = req.params.id;
   const filter = { _id: new ObjectId(id) };
   const result = await tasksCollection.deleteOne(filter);
@@ -75,11 +124,10 @@ app.get("/api/freelancers/:id", async (req, res) => {
     _id: new ObjectId(id),
   };
   const result = await usersCollection.findOne(query);
-  console.log(result);
   res.json(result);
 });
 
-app.post("/api/tasks", async (req, res) => {
+app.post("/api/tasks", verifyToken, verifyClient, async (req, res) => {
   const task = req.body;
   const newTask = {
     ...task,
@@ -91,7 +139,7 @@ app.post("/api/tasks", async (req, res) => {
 
 app.get("/api/tasks", async (req, res) => {
   const query = {};
-  console.log("Backend hitted successfully");
+
   if (req.query.search) {
     query.$or = [
       { title: { $regex: req.query.search, $options: "i" } },
@@ -117,30 +165,37 @@ app.get("/api/tasks", async (req, res) => {
     return res.json({ total, tasks });
   }
 
-  console.log("Q", query);
+
   const cursor = tasksCollection.find(query);
   const result = await cursor.toArray();
-  console.log("result", result);
+
   res.json(result);
 });
 
-app.get("/api/tasks/my-tasks", async (req, res) => {
+app.get("/api/tasks/my-tasks", verifyToken, verifyClient, async (req, res) => {
   const email = req.email;
   const query = {
-    email: email,
+    client_email: email,
   };
+
   const result = await tasksCollection.find(query).toArray();
+
   res.json(result);
 });
 
-app.get("/api/tasks/my-payments", async (req, res) => {
-  const email = req.email;
-  const query = {
-    email: email,
-  };
-  const result = await paymentsCollection.find(query).toArray();
-  res.json(result);
-});
+app.get(
+  "/api/tasks/my-payments",
+  verifyToken,
+  verifyClient,
+  async (req, res) => {
+    const email = req.email;
+    const query = {
+      client_email: email,
+    };
+    const result = await paymentsCollection.find(query).toArray();
+    res.json(result);
+  }
+);
 
 app.get("/api/tasks/:id", async (req, res) => {
   const id = req.params.id;
@@ -151,28 +206,33 @@ app.get("/api/tasks/:id", async (req, res) => {
   res.json(result);
 });
 
-app.get("/api/proposals/my-proposals", async (req, res) => {
-  const email = req.email;
-  const query = {
-    email: email,
-  };
-  const result = await proposalsCollection.find(query).toArray();
-  res.json(result);
-});
+app.get(
+  "/api/proposals/my-proposals",
+  verifyToken,
+  verifyFreelancer,
+  async (req, res) => {
+    const email = req.email;
+    const query = {
+      freelancer_email: email,
+    };
+    const result = await proposalsCollection.find(query).toArray();
+    res.json(result);
+  }
+);
 
-app.get("/api/proposals/byMail-freelancer-applied-proposal",async (req, res) => {
+app.get(
+  "/api/proposals/byMail-freelancer-applied-proposal",
+  verifyToken,
+  verifyFreelancer,
+  async (req, res) => {
     try {
       const email = req.query.email;
-
       if (!email) {
         return res
           .status(400)
           .json({ error: "Missing identity query target payload" });
       }
 
-      console.log("Searching accepted tasks for freelancer:", email);
-
-      // 1. Get all accepted proposals for this freelancer
       const proposals = await proposalsCollection
         .find({
           freelancer_email: email,
@@ -181,23 +241,18 @@ app.get("/api/proposals/byMail-freelancer-applied-proposal",async (req, res) => 
         .toArray();
 
       if (proposals.length === 0) {
-        return res.json([]); // Return early if they haven't applied anywhere or aren't accepted
+        return res.json([]);
       }
 
-      // 2. Extract the task_id strings and convert them into proper ObjectIds
       const taskObjectIds = proposals.map((p) => new ObjectId(p.task_id));
 
-      // 3. Query the Task Collection for these IDs where status is NOT completed
       const matchingTasks = await tasksCollection
         .find({
           _id: { $in: taskObjectIds },
-          status: { $ne: "completed" }, // 🎯 $ne means "Not Equal to" completed
         })
         .toArray();
 
-      // 4. Map the data together so the frontend gets the proposed budget context easily
       const responseData = matchingTasks.map((task) => {
-        // Find the proposal that matched this specific task to grab the custom budget
         const matchingProposal = proposals.find(
           (p) => p.task_id === task._id.toString()
         );
@@ -208,7 +263,7 @@ app.get("/api/proposals/byMail-freelancer-applied-proposal",async (req, res) => 
           category: task.category,
           client_email: task.client_email,
           description: task.description,
-          status: task.status, // Will display "in-progress" or "open"
+          status: task.status,
           budget: matchingProposal
             ? matchingProposal.proposed_budget
             : task.budget,
@@ -216,43 +271,46 @@ app.get("/api/proposals/byMail-freelancer-applied-proposal",async (req, res) => 
         };
       });
 
-      console.log(
-        `Delivering ${responseData.length} non-completed active workspace structures.`
-      );
       res.json(responseData);
     } catch (error) {
       console.error("Failed to build freelancer project list:", error);
-      res
-        .status(500)
-        .json({
-          error: "Internal compilation error inside database runtime engine",
-        });
+      res.status(500).json({
+        error: "Internal compilation error inside database runtime engine",
+      });
     }
   }
 );
 
-app.get("/api/proposals/by-task", async (req, res) => {
-  try {
-    const taskId = req.query.taskId;
+app.get(
+  "/api/proposals/by-task",
+  verifyToken,
+  verifyClient,
+  async (req, res) => {
+    try {
+      const taskId = req.query.taskId;
 
-    if (!taskId) {
-      return res.status(400).json({ error: "Missing taskId query parameter" });
+      if (!taskId) {
+        return res
+          .status(400)
+          .json({ error: "Missing taskId query parameter" });
+      }
+
+      // Find all proposals matching this specific task card ID
+      const query = { task_id: taskId };
+      const result = await proposalsCollection.find(query).toArray();
+
+      res.json(result);
+    } catch (error) {
+      console.error("Error fetching proposals by task ID:", error);
+      res.status(500).json({ error: "Internal Server Error" });
     }
-
-    // Find all proposals matching this specific task card ID
-    const query = { task_id: taskId };
-    const result = await proposalsCollection.find(query).toArray();
-
-    res.json(result);
-  } catch (error) {
-    console.error("Error fetching proposals by task ID:", error);
-    res.status(500).json({ error: "Internal Server Error" });
   }
-});
+);
 
-app.post("/api/proposals", async (req, res) => {
+app.post("/api/proposals", verifyToken, verifyFreelancer, async (req, res) => {
   try {
     const {
+      task_title,
       task_id,
       freelancer_email,
       proposed_budget,
@@ -260,6 +318,7 @@ app.post("/api/proposals", async (req, res) => {
       cover_note,
     } = req.body;
     if (
+      !task_title ||
       !task_id ||
       !freelancer_email ||
       !proposed_budget ||
@@ -279,6 +338,7 @@ app.post("/api/proposals", async (req, res) => {
       });
     }
     const newProposal = {
+      task_title : task_title,
       task_id: task_id,
       freelancer_email: freelancer_email,
       proposed_budget: parseFloat(proposed_budget),
@@ -296,7 +356,7 @@ app.post("/api/proposals", async (req, res) => {
   }
 });
 
-app.patch("/api/tasks/:id", async (req, res) => {
+app.patch("/api/tasks/:id", verifyToken, async (req, res) => {
   const id = req.params.id;
   const updatedTask = req.body;
   const filter = { _id: new ObjectId(id) };
@@ -325,8 +385,9 @@ app.patch("/api/tasks/:id", async (req, res) => {
   res.json(result);
 });
 
-app.patch("/api/user/:id", async (req, res) => {
+app.patch("/api/user/:id", verifyToken, verifyFreelancer, async (req, res) => {
   try {
+    
     const id = req.params.id;
     const updatedUser = req.body;
     const filter = { _id: new ObjectId(id) };
@@ -349,7 +410,7 @@ app.patch("/api/user/:id", async (req, res) => {
     const result = await usersCollection.updateOne(filter, {
       $set: updateFields,
     });
-    console.log(result);
+    
     res.json(result);
   } catch (error) {
     console.error("Profile update pipeline failed:", error);
@@ -359,7 +420,22 @@ app.patch("/api/user/:id", async (req, res) => {
   }
 });
 
-app.patch("/api/proposals/:id", async (req, res) => {
+app.get("/api/updatedUser/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await usersCollection.findOne(query);
+    if (!result) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    res.json(result);
+  } catch (error) {
+    console.error("Error fetching user:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.patch("/api/proposals/:id", verifyToken, verifyClient, async (req, res) => {
   const id = req.params.id;
   const updatedProposal = req.body;
   const filter = { _id: new ObjectId(id) };
@@ -372,207 +448,224 @@ app.patch("/api/proposals/:id", async (req, res) => {
   res.json(result);
 });
 
-app.post("/api/payments/confirm-session", async (req, res) => {
-  try {
-    const { session_id } = req.body;
-    if (!session_id) {
-      return res
-        .status(400)
-        .json({ success: false, error: "Missing session_id parameter." });
-    }
+app.post(
+  "/api/payments/confirm-session",
+  verifyToken,
+  verifyClient,
+  async (req, res) => {
+    try {
+      const { session_id } = req.body;
+      if (!session_id) {
+        return res
+          .status(400)
+          .json({ success: false, error: "Missing session_id parameter." });
+      }
 
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-    if (!session || session.payment_status !== "paid") {
-      return res
-        .status(400)
-        .json({ success: false, error: "Stripe payment verification failed." });
-    }
+      const session = await stripe.checkout.sessions.retrieve(session_id);
+      if (!session || session.payment_status !== "paid") {
+        return res.status(400).json({
+          success: false,
+          error: "Stripe payment verification failed.",
+        });
+      }
 
-    const {
-      taskId,
-      proposalId,
-      amount,
-      freelancerEmail,
-      clientEmail,
-      taskTitle,
-    } = session.metadata;
+      const {
+        taskId,
+        proposalId,
+        amount,
+        freelancerEmail,
+        clientEmail,
+        taskTitle,
+      } = session.metadata;
 
-    // 🔍 Check your backend terminal for this log to ensure data survived the roundtrip!
-    console.log("Processing verified Stripe metadata:", session.metadata);
+      // 🔍 Check your backend terminal for this log to ensure data survived the roundtrip!
 
-    // Validate ID formats before passing to MongoDB constructor to prevent unhandled exceptions
-    if (!taskId || !proposalId) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid metadata payload returned from payment processor.",
+      // Validate ID formats before passing to MongoDB constructor to prevent unhandled exceptions
+      if (!taskId || !proposalId) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid metadata payload returned from payment processor.",
+        });
+      }
+
+      const currentTask = await tasksCollection.findOne({
+        _id: new ObjectId(taskId),
       });
-    }
+      if (!currentTask) {
+        return res.status(404).json({
+          success: false,
+          error: "Target task listing no longer exists.",
+        });
+      }
 
-    const currentTask = await tasksCollection.findOne({
-      _id: new ObjectId(taskId),
-    });
-    if (!currentTask) {
-      return res.status(404).json({
-        success: false,
-        error: "Target task listing no longer exists.",
-      });
-    }
+      if (currentTask.status === "In Progress") {
+        // If you refresh the page after a successful save, it hits this guard clause.
+        // Let's make it user-friendly by returning a graceful success state instead of an error!
+        const existingPayment = await paymentsCollection.findOne({
+          transaction_id: session.payment_intent,
+        });
+        return res.json({
+          success: true,
+          data: {
+            taskTitle,
+            freelancerEmail,
+            amount: existingPayment
+              ? existingPayment.amount
+              : parseFloat(amount),
+          },
+        });
+      }
 
-    if (currentTask.status === "In Progress") {
-      // If you refresh the page after a successful save, it hits this guard clause.
-      // Let's make it user-friendly by returning a graceful success state instead of an error!
-      const existingPayment = await paymentsCollection.findOne({
+      // 1. Update the parent task status
+      await tasksCollection.updateOne(
+        { _id: new ObjectId(taskId) },
+        { $set: { status: "In Progress" } }
+      );
+
+      // 2. Accept the winning proposal
+      await proposalsCollection.updateOne(
+        { _id: new ObjectId(proposalId) },
+        { $set: { status: "Accepted" } }
+      );
+
+      // 3. Reject all other competitive proposal rows for this task automatically
+      await proposalsCollection.updateMany(
+        { task_id: taskId, _id: { $ne: new ObjectId(proposalId) } },
+        { $set: { status: "Rejected" } }
+      );
+
+      // 4. Record to ledger
+      const newPaymentDoc = {
+        client_email: clientEmail,
+        freelancer_email: freelancerEmail,
+        task_id: taskId,
+        amount: parseFloat(amount || 0),
         transaction_id: session.payment_intent,
-      });
-      return res.json({
+        payment_status: "paid",
+        paid_at: new Date(),
+      };
+      await paymentsCollection.insertOne(newPaymentDoc);
+
+      // 🚀 Return success: true explicitly
+      res.json({
         success: true,
         data: {
           taskTitle,
           freelancerEmail,
-          amount: existingPayment ? existingPayment.amount : parseFloat(amount),
+          amount: newPaymentDoc.amount,
         },
       });
+    } catch (error) {
+      console.error("Session Confirmation Sync Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Internal Server Error",
+      });
     }
-
-    // 1. Update the parent task status
-    await tasksCollection.updateOne(
-      { _id: new ObjectId(taskId) },
-      { $set: { status: "In Progress" } }
-    );
-
-    // 2. Accept the winning proposal
-    await proposalsCollection.updateOne(
-      { _id: new ObjectId(proposalId) },
-      { $set: { status: "Accepted" } }
-    );
-
-    // 3. Reject all other competitive proposal rows for this task automatically
-    await proposalsCollection.updateMany(
-      { task_id: taskId, _id: { $ne: new ObjectId(proposalId) } },
-      { $set: { status: "Rejected" } }
-    );
-
-    // 4. Record to ledger
-    const newPaymentDoc = {
-      client_email: clientEmail,
-      freelancer_email: freelancerEmail,
-      task_id: taskId,
-      amount: parseFloat(amount || 0),
-      transaction_id: session.payment_intent,
-      payment_status: "paid",
-      paid_at: new Date(),
-    };
-    await paymentsCollection.insertOne(newPaymentDoc);
-
-    // 🚀 Return success: true explicitly
-    res.json({
-      success: true,
-      data: {
-        taskTitle,
-        freelancerEmail,
-        amount: newPaymentDoc.amount,
-      },
-    });
-  } catch (error) {
-    console.error("Session Confirmation Sync Error:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message || "Internal Server Error",
-    });
   }
-});
+);
 
-app.get("/api/freelancer/earnings", async (req, res) => {
-  try {
-    const email = req.query.email;
-    if (!email) {
-      return res
-        .status(400)
-        .json({ error: "Missing identity query parameter" });
-    }
+app.get(
+  "/api/freelancer/earnings",
+  verifyToken,
+  verifyFreelancer,
+  async (req, res) => {
+    try {
+      const email = req.query.email;
+      if (!email) {
+        return res
+          .status(400)
+          .json({ error: "Missing identity query parameter" });
+      }
 
-    // 1. Find all paid clearances for this freelancer
-    const payments = await paymentsCollection
-      .find({
-        freelancer_email: email,
-        payment_status: "paid",
-      })
-      .toArray();
-
-    if (payments.length === 0) return res.json([]);
-
-    // 2. Fetch all matching tasks to get titles and completion timestamps
-    const taskIds = payments.map((p) => new ObjectId(p.task_id));
-    const tasks = await tasksCollection
-      .find({ _id: { $in: taskIds } })
-      .toArray();
-
-    // 3. Combine payloads into a unified table ledger row
-    const ledger = payments.map((p) => {
-      const matchingTask = tasks.find((t) => t._id.toString() === p.task_id);
-      return {
-        _id: p._id,
-        taskTitle: matchingTask
-          ? matchingTask.title
-          : "Unknown Assignment Workspace",
-        clientEmail: p.client_email,
-        amount: Number(p.amount || 0),
-        completionDate: matchingTask?.completed_at || p.paid_at,
-      };
-    });
-
-    res.json(ledger);
-  } catch (error) {
-    console.error("Earnings retrieval failed:", error);
-    res.status(500).json({ error: "Database mapping failure" });
-  }
-});
-
-app.get("/api/freelancer/dashboard-stats", async (req, res) => {
-  try {
-    const email = req.query.email;
-    if (!email) {
-      return res
-        .status(400)
-        .json({ error: "Missing freelancer identity context parameter" });
-    }
-
-    const [totalProposals, pendingProposals, acceptedProposals] =
-      await Promise.all([
-        proposalsCollection.countDocuments({ freelancer_email: email }),
-        proposalsCollection.countDocuments({
+      // 1. Find all paid clearances for this freelancer
+      const payments = await paymentsCollection
+        .find({
           freelancer_email: email,
-          status: "Pending",
-        }),
-        proposalsCollection.countDocuments({
-          freelancer_email: email,
-          status: "Accepted",
-        }),
-      ]);
+          payment_status: "paid",
+        })
+        .toArray();
 
-    const payments = await paymentsCollection
-      .find({
-        freelancer_email: email,
-        payment_status: "paid",
-      })
-      .toArray();
+      if (payments.length === 0) return res.json([]);
 
-    const totalEarnings = payments.reduce(
-      (sum, p) => sum + Number(p.amount || 0),
-      0
-    );
+      // 2. Fetch all matching tasks to get titles and completion timestamps
+      const taskIds = payments.map((p) => new ObjectId(p.task_id));
+      const tasks = await tasksCollection
+        .find({ _id: { $in: taskIds } })
+        .toArray();
 
-    res.json({
-      totalProposals,
-      pendingProposals,
-      acceptedProposals,
-      totalEarnings,
-    });
-  } catch (error) {
-    console.error("Dashboard overview pipeline crash:", error);
-    res.status(500).json({ error: "Database analytics aggregation error" });
+      // 3. Combine payloads into a unified table ledger row
+      const ledger = payments.map((p) => {
+        const matchingTask = tasks.find((t) => t._id.toString() === p.task_id);
+        return {
+          _id: p._id,
+          taskTitle: matchingTask
+            ? matchingTask.title
+            : "Unknown Assignment Workspace",
+          clientEmail: p.client_email,
+          amount: Number(p.amount || 0),
+          completionDate: matchingTask?.completed_at || p.paid_at,
+        };
+      });
+
+      res.json(ledger);
+    } catch (error) {
+      console.error("Earnings retrieval failed:", error);
+      res.status(500).json({ error: "Database mapping failure" });
+    }
   }
-});
+);
+
+app.get(
+  "/api/freelancer/dashboard-stats",
+  verifyToken,
+  verifyFreelancer,
+  async (req, res) => {
+    try {
+      const email = req.query.email;
+      if (!email) {
+        return res
+          .status(400)
+          .json({ error: "Missing freelancer identity context parameter" });
+      }
+
+      const [totalProposals, pendingProposals, acceptedProposals] =
+        await Promise.all([
+          proposalsCollection.countDocuments({ freelancer_email: email }),
+          proposalsCollection.countDocuments({
+            freelancer_email: email,
+            status: "Pending",
+          }),
+          proposalsCollection.countDocuments({
+            freelancer_email: email,
+            status: "Accepted",
+          }),
+        ]);
+
+      const payments = await paymentsCollection
+        .find({
+          freelancer_email: email,
+          payment_status: "paid",
+        })
+        .toArray();
+
+      const totalEarnings = payments.reduce(
+        (sum, p) => sum + Number(p.amount || 0),
+        0
+      );
+
+      res.json({
+        totalProposals,
+        pendingProposals,
+        acceptedProposals,
+        totalEarnings,
+      });
+    } catch (error) {
+      console.error("Dashboard overview pipeline crash:", error);
+      res.status(500).json({ error: "Database analytics aggregation error" });
+    }
+  }
+);
 // Send a ping to confirm a successful connection
 // await client.db("admin").command({ ping: 1 });
 //     console.log(

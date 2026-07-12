@@ -137,6 +137,26 @@ app.post("/api/tasks", verifyToken, verifyClient, async (req, res) => {
   res.json(result);
 });
 
+app.get("/api/tasksByCategory", async (req,res)=> {
+  try {
+    const { category } = req.query;
+    let query = { status: "open" };
+
+    if (category) {
+      query.category = decodeURIComponent(category);
+    }
+
+    const tasks = await tasksCollection.find(query).sort({ createdAt: -1 }).toArray();
+
+    res.status(200).json(tasks);
+  } catch (error) {
+    console.error("Error fetching similar tasks:", error);
+    res
+      .status(500)
+      .json({ message: "Server error while fetching suggestions" });
+  }
+});
+
 app.get("/api/tasks", async (req, res) => {
   const query = {};
 
